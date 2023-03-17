@@ -3,6 +3,7 @@ from importlib.resources import path
 from skyplane import compute
 from skyplane.planner.solver import ThroughputProblem
 from skyplane.planner.topology import ReplicationTopology
+from skyplane.planner.gateway_program import GatewayProgram
 
 
 class Planner:
@@ -12,32 +13,52 @@ class Planner:
         self.dst_provider = dst_provider
         self.dst_region = dst_region
 
-    def plan(self) -> ReplicationTopology:
+    def plan(self) -> GatewayProgram:
         raise NotImplementedError
 
 
 class DirectPlanner(Planner):
-    def __init__(self, src_provider: str, src_region, dst_provider: str, dst_region: str, n_instances: int, n_connections: int):
+    def __init__(self, src_provider: str, src_bucket: str, src_region, dst_provider: str, dst_bucket: str, dst_region: str, n_instances: int, n_connections: int):
         self.n_instances = n_instances
         self.n_connections = n_connections
         super().__init__(src_provider, src_region, dst_provider, dst_region)
 
-    def plan(self) -> ReplicationTopology:
+    def plan(self) -> GatewayProgram:
         src_region_tag = f"{self.src_provider}:{self.src_region}"
         dst_region_tag = f"{self.dst_provider}:{self.dst_region}"
         if src_region_tag == dst_region_tag:  # intra-region transfer w/o solver
-            topo = ReplicationTopology()
-            for i in range(self.n_instances):
-                topo.add_objstore_instance_edge(src_region_tag, src_region_tag, i)
-                topo.add_instance_objstore_edge(src_region_tag, i, src_region_tag)
+            topo = GatewayProgram()
+            src_op = GatewayReadObjectStore(self.src_bucket, self.src_region)
+            dst_op = GatewayWriteObjectStore(self.dst_bucket, self.dst_region)
+            topo.add_operators([src_op, dst_op])
+            for _ in range(self.n_instances):
+                send_op = GatewaySend(None, dst_region_tag)
+                receive_op = GatewayReceive()
+                src_op.add_child(send_op)
+                send_op.add_child(receive_op)
+                
+                receive_op.add_child(dst_op)
+                topo.add_operators([send_op, receive_op])
             topo.cost_per_gb = 0
             return topo
         else:  # inter-region transfer w/ solver
-            topo = ReplicationTopology()
-            for i in range(self.n_instances):
-                topo.add_objstore_instance_edge(src_region_tag, src_region_tag, i)
-                topo.add_instance_instance_edge(src_region_tag, i, dst_region_tag, i, self.n_connections)
-                topo.add_instance_objstore_edge(dst_region_tag, i, dst_region_tag)
+            topo = GatewayProgram()
+            src_op = GatewayReadObjectStore(self.src_bucket, self.src_region)
+            dst_op = GatewayWriteObjectStore(self.dst_bucket, self.dst_region)
+            topo.add_operators([src_op, dst_op])
+            for _ in range(self.n_instances):
+                send_op_src = GatewaySend(None, src_region_tag)
+                receive_op_src = GatewayReceive()
+                send_op_src.add_child(receive_op_src)
+                src_op.add_child(send_op_src)
+
+                send_op_dst = GatewaySend(None, dst_region_tag)
+                receive_op_dst = GatewayReceive()
+                receive_op_src.add_child(send_op_dst)
+                send_op_dst.add_child(receive_op_dst)
+                receive_op_dst.add_child(dst_op)
+                
+                topo.add_operators([send_op_src, receive_op_src, send_op_dst, receive_op_dst])
             topo.cost_per_gb = compute.CloudProvider.get_transfer_cost(src_region_tag, dst_region_tag)
             return topo
 

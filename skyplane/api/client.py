@@ -96,8 +96,10 @@ class SkyplaneClient:
     # methods to create dataplane
     def dataplane(
         self,
+        src_bucket: str,
         src_cloud_provider: str,
         src_region: str,
+        dst_bucket: str,
         dst_cloud_provider: str,
         dst_region: str,
         solver_type: str = "direct",
@@ -124,7 +126,7 @@ class SkyplaneClient:
         :type n_connections: int
         """
         if solver_type.lower() == "direct":
-            planner = DirectPlanner(src_cloud_provider, src_region, dst_cloud_provider, dst_region, n_vms, n_connections)
+            planner = DirectPlanner(src_cloud_provider, src_bucket, src_region, dst_cloud_provider, dst_bucket, dst_region, n_vms, n_connections)
             topo = planner.plan()
             logger.fs.info(f"[SkyplaneClient.direct_dataplane] Topology: {topo.to_json()}")
             return Dataplane(clientid=self.clientid, topology=topo, provisioner=self.provisioner, transfer_config=self.transfer_config)
